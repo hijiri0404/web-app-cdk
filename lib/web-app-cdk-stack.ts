@@ -51,276 +51,276 @@ export class WebAppCdkStack extends cdk.Stack {
       zoneName: domainName, // 管理対象のドメイン名
     });
 
-    // SSL Certificate for CloudFront (must be in us-east-1)
+    // SSL証明書をAWS Certificate Manager（ACM）で作成（CloudFront用、us-east-1リージョン必須）
     const certificate = new acm.Certificate(this, 'WebAppCertificate', {
-      domainName: domainName,
-      subjectAlternativeNames: [`www.${domainName}`, `api.${domainName}`],
-      validation: acm.CertificateValidation.fromDns(hostedZone),
+      domainName: domainName, // メインドメイン名（例：hijiri0404.link）
+      subjectAlternativeNames: [`www.${domainName}`, `api.${domainName}`], // サブドメインも証明書に追加（www.hijiri0404.link, api.hijiri0404.link）
+      validation: acm.CertificateValidation.fromDns(hostedZone), // DNS検証でSSL証明書を自動検証
     });
 
-    // Tasks API Lambda function
+    // タスク管理API用のLambda関数を定義
     const tasksLambda = new lambda.Function(this, 'TasksApiFunction', {
-      runtime: lambda.Runtime.NODEJS_20_X,
-      handler: 'index.handler',
-      code: lambda.Code.fromAsset('lambda/tasks-api'),
-      timeout: cdk.Duration.seconds(30),
-      environment: {
-        NODE_OPTIONS: '--enable-source-maps',
+      runtime: lambda.Runtime.NODEJS_20_X, // Node.js 20.x ランタイムを指定
+      handler: 'index.handler', // Lambda関数のエントリーポイント（index.jsのhandler関数）
+      code: lambda.Code.fromAsset('lambda/tasks-api'), // Lambda関数のソースコードのパス
+      timeout: cdk.Duration.seconds(30), // Lambda関数のタイムアウト時間（30秒）
+      environment: { // Lambda関数の環境変数を設定
+        NODE_OPTIONS: '--enable-source-maps', // TypeScriptのソースマップを有効化（デバッグに有用）
       },
     });
 
-    // DynamoDB table using AWS Solutions Construct
+    // AWS Solutions ConstructsのLambda-DynamoDB連携パターンを使用してDynamoDBテーブルを作成
     const lambdaToDynamoDB = new LambdaToDynamoDB(this, 'TasksLambdaToDynamoDB', {
-      existingLambdaObj: tasksLambda,
-      dynamoTableProps: {
-        tableName: 'TasksTable',
-        partitionKey: {
-          name: 'id',
-          type: dynamodb.AttributeType.STRING,
+      existingLambdaObj: tasksLambda, // 既存のLambda関数を指定（上で作成したtasksLambda）
+      dynamoTableProps: { // DynamoDBテーブルの詳細設定
+        tableName: 'TasksTable', // テーブル名を指定
+        partitionKey: { // パーティションキー（プライマリキーの一部）
+          name: 'id', // キー名：タスクの一意識別子
+          type: dynamodb.AttributeType.STRING, // データ型：文字列
         },
-        sortKey: {
-          name: 'userId',
-          type: dynamodb.AttributeType.STRING,
+        sortKey: { // ソートキー（プライマリキーの一部、複合キー構成）
+          name: 'userId', // キー名：ユーザーID
+          type: dynamodb.AttributeType.STRING, // データ型：文字列
         },
-        billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
-        encryption: dynamodb.TableEncryption.AWS_MANAGED,
-        pointInTimeRecoverySpecification: {
-          pointInTimeRecoveryEnabled: true,
+        billingMode: dynamodb.BillingMode.PAY_PER_REQUEST, // 従量課金モード（使用量に応じた課金）
+        encryption: dynamodb.TableEncryption.AWS_MANAGED, // AWS管理のキーで暗号化（追加料金なし）
+        pointInTimeRecoverySpecification: { // ポイントインタイム復旧の設定
+          pointInTimeRecoveryEnabled: true, // ポイントインタイム復旧を有効化（過去35日間のデータ復旧可能）
         },
-        removalPolicy: cdk.RemovalPolicy.DESTROY, // For demo purposes
+        removalPolicy: cdk.RemovalPolicy.DESTROY, // デモ用途のため、スタック削除時にテーブルも削除
       },
     });
 
-    // Add table name to Lambda environment
+    // Lambda関数の環境変数にDynamoDBテーブル名を設定（Lambda関数内でテーブルにアクセスするため）
     tasksLambda.addEnvironment('TABLE_NAME', lambdaToDynamoDB.dynamoTable.tableName);
 
-    // Cognito + API Gateway + Lambda using AWS Solutions Construct
+    // AWS Solutions ConstructsのCognito + API Gateway + Lambda連携パターンを使用
     const cognitoApiLambda = new CognitoToApiGatewayToLambda(this, 'CognitoApiLambda', {
-      existingLambdaObj: tasksLambda,
-      apiGatewayProps: {
-        restApiName: 'TasksApi',
-        description: 'API for task management application',
+      existingLambdaObj: tasksLambda, // 既存のLambda関数を指定
+      apiGatewayProps: { // API Gatewayの詳細設定
+        restApiName: 'TasksApi', // REST APIの名前
+        description: 'API for task management application', // APIの説明
         proxy: false, // プロキシを無効にして個別のリソース/メソッドを追加可能にする
-        defaultCorsPreflightOptions: {
-          allowOrigins: apigateway.Cors.ALL_ORIGINS,
-          allowMethods: apigateway.Cors.ALL_METHODS,
-          allowHeaders: ['Content-Type', 'Authorization'],
+        defaultCorsPreflightOptions: { // CORS（Cross-Origin Resource Sharing）設定
+          allowOrigins: apigateway.Cors.ALL_ORIGINS, // 全てのオリジンからのアクセスを許可
+          allowMethods: apigateway.Cors.ALL_METHODS, // 全てのHTTPメソッドを許可
+          allowHeaders: ['Content-Type', 'Authorization'], // 許可するHTTPヘッダーを指定
         },
       },
-      cognitoUserPoolProps: {
-        selfSignUpEnabled: true,
-        signInAliases: {
-          email: true,
+      cognitoUserPoolProps: { // Amazon Cognitoユーザープールの詳細設定
+        selfSignUpEnabled: true, // ユーザーの自己登録を許可
+        signInAliases: { // サインイン時の識別子設定
+          email: true, // メールアドレスでのサインインを有効化
         },
-        standardAttributes: {
-          email: {
-            required: true,
-            mutable: true,
+        standardAttributes: { // ユーザープロファイルの標準属性設定
+          email: { // メールアドレス属性
+            required: true, // 必須項目として設定
+            mutable: true, // 後から変更可能
           },
-          givenName: {
-            required: true,
-            mutable: true,
+          givenName: { // 名前（名）属性
+            required: true, // 必須項目として設定
+            mutable: true, // 後から変更可能
           },
-          familyName: {
-            required: true,
-            mutable: true,
+          familyName: { // 名前（姓）属性
+            required: true, // 必須項目として設定
+            mutable: true, // 後から変更可能
           },
         },
-        passwordPolicy: {
-          minLength: 8,
-          requireLowercase: true,
-          requireUppercase: true,
-          requireDigits: true,
-          requireSymbols: true,
+        passwordPolicy: { // パスワードポリシーの設定
+          minLength: 8, // 最小文字数：8文字
+          requireLowercase: true, // 小文字を必須
+          requireUppercase: true, // 大文字を必須
+          requireDigits: true, // 数字を必須
+          requireSymbols: true, // 記号を必須
         },
-        accountRecovery: cognito.AccountRecovery.EMAIL_ONLY,
-        removalPolicy: cdk.RemovalPolicy.DESTROY, // For demo purposes
+        accountRecovery: cognito.AccountRecovery.EMAIL_ONLY, // アカウント復旧はメールのみ
+        removalPolicy: cdk.RemovalPolicy.DESTROY, // デモ用途のため、スタック削除時にユーザープールも削除
       },
-      cognitoUserPoolClientProps: {
-        authFlows: {
-          userSrp: true,
-          userPassword: false,
+      cognitoUserPoolClientProps: { // Cognitoユーザープールクライアントの設定
+        authFlows: { // 認証フローの設定
+          userSrp: true, // SRP（Secure Remote Password）認証を有効化（安全な認証方式）
+          userPassword: false, // パスワード直接送信認証を無効化（セキュリティ強化）
         },
-        generateSecret: false,
+        generateSecret: false, // クライアントシークレットを生成しない（フロントエンドアプリ用設定）
       },
     });
 
-    // Add API routes
-    const api = cognitoApiLambda.apiGateway;
-    const tasksResource = api.root.addResource('tasks');
-    tasksResource.addMethod('GET');
-    tasksResource.addMethod('POST');
+    // API Gatewayのルート設定を追加
+    const api = cognitoApiLambda.apiGateway; // Solutions Constructsで作成されたAPI Gatewayインスタンスを取得
+    const tasksResource = api.root.addResource('tasks'); // '/tasks'リソースを追加（全タスク操作用）
+    tasksResource.addMethod('GET'); // GET /tasks - 全タスク一覧取得
+    tasksResource.addMethod('POST'); // POST /tasks - 新規タスク作成
 
-    const taskResource = tasksResource.addResource('{id}');
-    taskResource.addMethod('GET');
-    taskResource.addMethod('PUT');
-    taskResource.addMethod('DELETE');
+    const taskResource = tasksResource.addResource('{id}'); // '/tasks/{id}'リソースを追加（個別タスク操作用、{id}はパスパラメータ）
+    taskResource.addMethod('GET'); // GET /tasks/{id} - 指定タスクの詳細取得
+    taskResource.addMethod('PUT'); // PUT /tasks/{id} - 指定タスクの更新
+    taskResource.addMethod('DELETE'); // DELETE /tasks/{id} - 指定タスクの削除
 
-    // S3 bucket for frontend hosting
+    // フロントエンド用S3バケットを作成（Webサイトのファイルを格納）
     const websiteBucket = new s3.Bucket(this, 'WebsiteBucket', {
-      bucketName: `${domainName}-website`,
-      removalPolicy: cdk.RemovalPolicy.DESTROY,
-      autoDeleteObjects: true,
-      publicReadAccess: false,
-      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
-      encryption: s3.BucketEncryption.S3_MANAGED,
-      enforceSSL: true,
+      bucketName: `${domainName}-website`, // バケット名：ドメイン名-website形式
+      removalPolicy: cdk.RemovalPolicy.DESTROY, // デモ用途のため、スタック削除時にバケットも削除
+      autoDeleteObjects: true, // バケット削除時に中身のオブジェクトも自動削除
+      publicReadAccess: false, // パブリック読み取りアクセスを禁止（CloudFront経由でのみアクセス可能）
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL, // 全てのパブリックアクセスをブロック（セキュリティ強化）
+      encryption: s3.BucketEncryption.S3_MANAGED, // S3管理暗号化を有効化（追加料金なし）
+      enforceSSL: true, // HTTPS接続を強制（HTTP接続を拒否）
     });
 
-    // Origin Access Control for CloudFront
+    // CloudFront用のOrigin Access Control（OAC）を作成（S3へのセキュアなアクセス制御）
     const originAccessControl = new cloudfront.S3OriginAccessControl(this, 'OAC', {
-      description: 'OAC for website bucket',
+      description: 'OAC for website bucket', // OACの説明：Webサイトバケットへのアクセス制御用
     });
 
-    // CloudFront distribution
+    // CloudFrontディストリビューション（CDN）を作成（世界中にWebサイトを高速配信）
     const distribution = new cloudfront.Distribution(this, 'WebsiteDistribution', {
-      defaultBehavior: {
-        origin: origins.S3BucketOrigin.withOriginAccessControl(websiteBucket, {
-          originAccessControl,
+      defaultBehavior: { // デフォルトの配信動作設定（全てのパスに適用される基本設定）
+        origin: origins.S3BucketOrigin.withOriginAccessControl(websiteBucket, { // S3バケットをオリジンとしてOAC経由でアクセス
+          originAccessControl, // 上で作成したOACを使用
         }),
-        viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
-        allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD_OPTIONS,
-        cachedMethods: cloudfront.CachedMethods.CACHE_GET_HEAD_OPTIONS,
-        compress: true,
+        viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS, // HTTPリクエストを自動的にHTTPSにリダイレクト
+        allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD_OPTIONS, // 許可するHTTPメソッド（読み取り専用）
+        cachedMethods: cloudfront.CachedMethods.CACHE_GET_HEAD_OPTIONS, // キャッシュ対象のHTTPメソッド
+        compress: true, // gzip圧縮を有効化（転送量削減、表示速度向上）
       },
-      additionalBehaviors: {
-        '/api/*': {
-          origin: new origins.RestApiOrigin(api),
-          viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
-          allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
-          cachedMethods: cloudfront.CachedMethods.CACHE_GET_HEAD_OPTIONS,
-          cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
-          originRequestPolicy: cloudfront.OriginRequestPolicy.CORS_S3_ORIGIN,
+      additionalBehaviors: { // 特定パス用の追加配信動作設定
+        '/api/*': { // '/api/'で始まる全てのパスに適用される設定（API呼び出し用）
+          origin: new origins.RestApiOrigin(api), // API GatewayをオリジンとしてAPIリクエストを転送
+          viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS, // API呼び出しもHTTPS強制
+          allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL, // 全HTTPメソッドを許可（GET、POST、PUT、DELETE等）
+          cachedMethods: cloudfront.CachedMethods.CACHE_GET_HEAD_OPTIONS, // 安全なメソッドのみキャッシュ
+          cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED, // APIレスポンスはキャッシュしない（動的コンテンツのため）
+          originRequestPolicy: cloudfront.OriginRequestPolicy.CORS_S3_ORIGIN, // CORS対応のリクエストポリシー
         },
       },
-      domainNames: [domainName, `www.${domainName}`],
-      certificate: certificate,
-      defaultRootObject: 'index.html',
-      errorResponses: [
+      domainNames: [domainName, `www.${domainName}`], // カスタムドメイン名を設定（メインドメインとwwwサブドメイン）
+      certificate: certificate, // 上で作成したSSL証明書を使用
+      defaultRootObject: 'index.html', // ルートアクセス時のデフォルトファイル
+      errorResponses: [ // エラーページのカスタム設定（SPA用設定）
         {
-          httpStatus: 404,
-          responseHttpStatus: 200,
-          responsePagePath: '/index.html',
+          httpStatus: 404, // 404エラー（ページが見つからない）
+          responseHttpStatus: 200, // 200 OKとしてレスポンス
+          responsePagePath: '/index.html', // index.htmlを返す（SPAのルーティング対応）
         },
         {
-          httpStatus: 403,
-          responseHttpStatus: 200,
-          responsePagePath: '/index.html',
+          httpStatus: 403, // 403エラー（アクセス拒否）
+          responseHttpStatus: 200, // 200 OKとしてレスポンス
+          responsePagePath: '/index.html', // index.htmlを返す（SPAのルーティング対応）
         },
       ],
-      httpVersion: cloudfront.HttpVersion.HTTP2_AND_3,
-      priceClass: cloudfront.PriceClass.PRICE_CLASS_100,
+      httpVersion: cloudfront.HttpVersion.HTTP2_AND_3, // HTTP/2とHTTP/3を有効化（高速化）
+      priceClass: cloudfront.PriceClass.PRICE_CLASS_100, // 料金クラス：最も安い設定（北米・欧州のみ）
     });
 
-    // Grant CloudFront access to S3 bucket
+    // CloudFrontにS3バケットへのアクセス権限を付与（セキュアな権限設定）
     websiteBucket.addToResourcePolicy(
       new iam.PolicyStatement({
-        sid: 'AllowCloudFrontServicePrincipal',
-        actions: ['s3:GetObject'],
-        resources: [websiteBucket.arnForObjects('*')],
-        principals: [new iam.ServicePrincipal('cloudfront.amazonaws.com')],
-        conditions: {
+        sid: 'AllowCloudFrontServicePrincipal', // ポリシーステートメントの識別子
+        actions: ['s3:GetObject'], // S3オブジェクトの読み取り権限のみ許可
+        resources: [websiteBucket.arnForObjects('*')], // バケット内の全オブジェクトを対象
+        principals: [new iam.ServicePrincipal('cloudfront.amazonaws.com')], // CloudFrontサービスプリンシパルを指定
+        conditions: { // 条件付きアクセス（特定のディストリビューションからのみ許可）
           StringEquals: {
-            'AWS:SourceArn': `arn:aws:cloudfront::${this.account}:distribution/${distribution.distributionId}`,
+            'AWS:SourceArn': `arn:aws:cloudfront::${this.account}:distribution/${distribution.distributionId}`, // このディストリビューションIDからのアクセスのみ許可
           },
         },
       })
     );
 
-    // Route 53 records
+    // Route53 DNSレコードの設定（ドメイン名とCloudFrontを紐付け）
     new route53.ARecord(this, 'WebsiteARecord', {
-      zone: hostedZone,
-      recordName: domainName,
-      target: route53.RecordTarget.fromAlias(
-        new targets.CloudFrontTarget(distribution)
+      zone: hostedZone, // 既存のRoute53ホストゾーンを指定
+      recordName: domainName, // メインドメイン名のAレコード
+      target: route53.RecordTarget.fromAlias( // エイリアスレコードとして設定（CloudFrontへの参照）
+        new targets.CloudFrontTarget(distribution) // CloudFrontディストリビューションをターゲットに設定
       ),
     });
 
     new route53.ARecord(this, 'WebsiteWWWARecord', {
-      zone: hostedZone,
-      recordName: `www.${domainName}`,
-      target: route53.RecordTarget.fromAlias(
-        new targets.CloudFrontTarget(distribution)
+      zone: hostedZone, // 既存のRoute53ホストゾーンを指定
+      recordName: `www.${domainName}`, // wwwサブドメインのAレコード
+      target: route53.RecordTarget.fromAlias( // エイリアスレコードとして設定
+        new targets.CloudFrontTarget(distribution) // 同じCloudFrontディストリビューションをターゲットに設定
       ),
     });
 
-    // Custom domain for API Gateway
+    // API Gateway用のカスタムドメイン設定
     const apiDomainName = new apigateway.DomainName(this, 'ApiDomainName', {
-      domainName: `api.${domainName}`,
-      certificate: certificate,
-      endpointType: apigateway.EndpointType.EDGE,
-      securityPolicy: apigateway.SecurityPolicy.TLS_1_2,
+      domainName: `api.${domainName}`, // APIサブドメイン（例：api.hijiri0404.link）
+      certificate: certificate, // 上で作成したSSL証明書を使用
+      endpointType: apigateway.EndpointType.EDGE, // エッジ最適化エンドポイント（CloudFrontと同様の効果）
+      securityPolicy: apigateway.SecurityPolicy.TLS_1_2, // TLS 1.2以上のセキュリティポリシーを強制
     });
 
-    apiDomainName.addBasePathMapping(api, {
-      basePath: 'v1',
+    apiDomainName.addBasePathMapping(api, { // API Gatewayとカスタムドメインのマッピング設定
+      basePath: 'v1', // APIのベースパス（api.domain.com/v1/tasksでアクセス可能）
     });
 
     new route53.ARecord(this, 'ApiARecord', {
-      zone: hostedZone,
-      recordName: `api.${domainName}`,
-      target: route53.RecordTarget.fromAlias(
-        new targets.ApiGatewayDomain(apiDomainName)
+      zone: hostedZone, // 既存のRoute53ホストゾーンを指定
+      recordName: `api.${domainName}`, // APIサブドメインのAレコード
+      target: route53.RecordTarget.fromAlias( // エイリアスレコードとして設定
+        new targets.ApiGatewayDomain(apiDomainName) // API Gatewayカスタムドメインをターゲットに設定
       ),
     });
 
-    // CDK Nag suppressions for demo environment
+    // CDK Nagセキュリティチェックの抑制設定（デモ環境用の例外設定）
     NagSuppressions.addStackSuppressions(this, [
       {
-        id: 'AwsSolutions-IAM4',
-        reason: 'AWS managed policies are acceptable for this demo application',
+        id: 'AwsSolutions-IAM4', // AWS管理ポリシー使用の警告を抑制
+        reason: 'AWS managed policies are acceptable for this demo application', // デモアプリケーションではAWS管理ポリシーを許可
       },
       {
-        id: 'AwsSolutions-IAM5',
-        reason: 'Wildcard permissions are acceptable for this demo application',
+        id: 'AwsSolutions-IAM5', // ワイルドカード権限の警告を抑制
+        reason: 'Wildcard permissions are acceptable for this demo application', // デモアプリケーションではワイルドカード権限を許可
       },
       {
-        id: 'AwsSolutions-APIG2',
-        reason: 'Request validation is not required for this demo API',
+        id: 'AwsSolutions-APIG2', // APIリクエスト検証の警告を抑制
+        reason: 'Request validation is not required for this demo API', // デモAPIではリクエスト検証を省略
       },
       {
-        id: 'AwsSolutions-APIG3',
-        reason: 'WAF is not required for this demo API',
+        id: 'AwsSolutions-APIG3', // WAF設定の警告を抑制
+        reason: 'WAF is not required for this demo API', // デモAPIではWAF（Web Application Firewall）を省略
       },
       {
-        id: 'AwsSolutions-COG2',
-        reason: 'MFA is not required for this demo application',
+        id: 'AwsSolutions-COG2', // Cognito MFA設定の警告を抑制
+        reason: 'MFA is not required for this demo application', // デモアプリケーションでは多要素認証（MFA）を省略
       },
       {
-        id: 'AwsSolutions-COG3',
-        reason: 'Advanced security features are not required for this demo',
+        id: 'AwsSolutions-COG3', // Cognitoセキュリティ機能の警告を抑制
+        reason: 'Advanced security features are not required for this demo', // デモでは高度なセキュリティ機能を省略
       },
     ]);
 
-    // Outputs
+    // CloudFormationスタックの出力値設定（デプロイ後に表示される重要な情報）
     new cdk.CfnOutput(this, 'WebsiteURL', {
-      value: `https://${domainName}`,
-      description: 'Website URL',
+      value: `https://${domainName}`, // WebサイトのURL（HTTPS形式）
+      description: 'Website URL', // 出力値の説明
     });
 
     new cdk.CfnOutput(this, 'ApiURL', {
-      value: `https://api.${domainName}/v1`,
-      description: 'API URL',
+      value: `https://api.${domainName}/v1`, // API エンドポイントのURL（HTTPS形式、v1パス付き）
+      description: 'API URL', // 出力値の説明
     });
 
     new cdk.CfnOutput(this, 'UserPoolId', {
-      value: cognitoApiLambda.userPool.userPoolId,
-      description: 'Cognito User Pool ID',
+      value: cognitoApiLambda.userPool.userPoolId, // Cognitoユーザープールの一意ID（フロントエンド設定で使用）
+      description: 'Cognito User Pool ID', // 出力値の説明
     });
 
     new cdk.CfnOutput(this, 'UserPoolClientId', {
-      value: cognitoApiLambda.userPoolClient.userPoolClientId,
-      description: 'Cognito User Pool Client ID',
+      value: cognitoApiLambda.userPoolClient.userPoolClientId, // Cognitoユーザープールクライアントの一意ID（フロントエンド設定で使用）
+      description: 'Cognito User Pool Client ID', // 出力値の説明
     });
 
     new cdk.CfnOutput(this, 'CloudFrontDistributionId', {
-      value: distribution.distributionId,
-      description: 'CloudFront Distribution ID',
+      value: distribution.distributionId, // CloudFrontディストリビューションの一意ID（キャッシュクリア等で使用）
+      description: 'CloudFront Distribution ID', // 出力値の説明
     });
 
     new cdk.CfnOutput(this, 'S3BucketName', {
-      value: websiteBucket.bucketName,
-      description: 'S3 Bucket Name for website files',
+      value: websiteBucket.bucketName, // S3バケット名（ファイルアップロードで使用）
+      description: 'S3 Bucket Name for website files', // 出力値の説明
     });
   }
 }

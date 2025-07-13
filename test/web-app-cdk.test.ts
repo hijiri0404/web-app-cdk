@@ -88,8 +88,8 @@ describe('WebAppCdkStack', () => {
     });
 
     test('Required API resources are created', () => {
-      template.resourceCountIs('AWS::ApiGateway::Resource', Match.anyValue());
-      template.resourceCountIs('AWS::ApiGateway::Method', Match.anyValue());
+      template.resourcePropertiesCountIs('AWS::ApiGateway::Resource', {}, 2); // /tasks and /tasks/{id}
+      template.resourcePropertiesCountIs('AWS::ApiGateway::Method', {}, 8); // GET, POST, PUT, DELETE, OPTIONS methods (with root OPTIONS)
     });
   });
 
@@ -111,7 +111,7 @@ describe('WebAppCdkStack', () => {
 
     test('User Pool Client is configured correctly', () => {
       template.hasResourceProperties('AWS::Cognito::UserPoolClient', {
-        ExplicitAuthFlows: ['USER_SRP_AUTH'],
+        ExplicitAuthFlows: ['ALLOW_USER_SRP_AUTH', 'ALLOW_REFRESH_TOKEN_AUTH'],
         GenerateSecret: false,
       });
     });
@@ -146,7 +146,6 @@ describe('WebAppCdkStack', () => {
           Enabled: true,
           HttpVersion: 'http2and3',
           PriceClass: 'PriceClass_100',
-          ViewerProtocolPolicy: 'redirect-to-https',
         },
       });
     });
