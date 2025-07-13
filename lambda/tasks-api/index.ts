@@ -34,7 +34,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     const method = event.httpMethod;
     const path = event.path;
     const tableName = process.env.TABLE_NAME;
-    
+
     if (!tableName) {
       throw new Error('TABLE_NAME environment variable is not set');
     }
@@ -51,173 +51,176 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
 
     // HTTPメソッドに応じて処理を分岐
     switch (method) {
-      case 'GET': // GETリクエストの処理（データ取得）
-        if (path.includes('/tasks/') && event.pathParameters?.id) {
-          // 単一タスクの取得処理（パスに{id}が含まれる場合）
-          const taskId = event.pathParameters.id; // URLパラメータからタスクIDを取得
-          const result = await ddbDocClient.send(new GetCommand({
-            TableName: tableName, // 対象のDynamoDBテーブル
-            Key: { id: taskId, userId } // 複合キー（パーティションキー: id, ソートキー: userId）
-          }));
-          
-          // 指定されたタスクが見つからない場合は404エラーを返す
-          if (!result.Item) {
-            return {
-              statusCode: 404, // HTTP 404 Not Found
-              headers,
-              body: JSON.stringify({ error: 'Task not found' })
-            };
-          }
-          
-          // タスクが見つかった場合はデータを返す
-          return {
-            statusCode: 200, // HTTP 200 OK
-            headers,
-            body: JSON.stringify(result.Item) // タスクデータをJSON形式で返す
-          };
-        } else {
-          // 全タスク一覧の取得処理（/tasksへのGETリクエスト）
-          const result = await ddbDocClient.send(new ScanCommand({
-            TableName: tableName, // 対象のDynamoDBテーブル
-            FilterExpression: 'userId = :userId', // ユーザーIDでフィルタリング
-            ExpressionAttributeValues: {
-              ':userId': userId // フィルタで使用するユーザーID値
-            }
-          }));
-          
-          // 取得したタスク一覧を返す
-          return {
-            statusCode: 200, // HTTP 200 OK
-            headers,
-            body: JSON.stringify(result.Items || []) // タスク配列をJSON形式で返す（空配列も考慮）
-          };
-        }
-
-      case 'POST': // POSTリクエストの処理（新規タスク作成）
-        // リクエストボディからタスクデータを取得（JSON文字列をオブジェクトに変換）
-        const newTask = JSON.parse(event.body || '{}') as Partial<Task>;
-        // 新しいタスクオブジェクトを作成（必須フィールドにデフォルト値を設定）
-        const task: Task = {
-          id: generateId(), // 一意のIDを生成（現在時刻＋ランダム文字列）
-          title: newTask.title || '', // タイトル（空文字列をデフォルト値とする）
-          description: newTask.description, // 説明（undefinedも許可）
-          status: newTask.status || 'pending', // ステータス（デフォルトは'pending'）
-          priority: newTask.priority || 'medium', // 優先度（デフォルトは'medium'）
-          userId, // 認証されたユーザーのID
-          createdAt: new Date().toISOString(), // 作成日時（ISO 8601形式）
-          updatedAt: new Date().toISOString() // 更新日時（ISO 8601形式）
-        };
-
-        // DynamoDBにタスクを保存
-        await ddbDocClient.send(new PutCommand({
-          TableName: tableName, // 対象のDynamoDBテーブル
-          Item: task // 保存するタスクオブジェクト
-        }));
-
-        // 作成成功のレスポンスを返す
-        return {
-          statusCode: 201, // HTTP 201 Created（新規作成成功）
-          headers,
-          body: JSON.stringify(task) // 作成されたタスクデータを返す
-        };
-
-      case 'PUT': // PUTリクエストの処理（既存タスクの更新）
-        // URLパラメータからタスクIDが取得できない場合はエラー
-        if (!event.pathParameters?.id) {
-          return {
-            statusCode: 400, // HTTP 400 Bad Request
-            headers,
-            body: JSON.stringify({ error: 'Task ID is required' })
-          };
-        }
-
+    case 'GET': // GETリクエストの処理（データ取得）
+      if (path.includes('/tasks/') && event.pathParameters?.id) {
+        // 単一タスクの取得処理（パスに{id}が含まれる場合）
         const taskId = event.pathParameters.id; // URLパラメータからタスクIDを取得
-        const updates = JSON.parse(event.body || '{}'); // リクエストボディから更新データを取得
-        
-        // DynamoDB UpdateExpressionの構築用配列とオブジェクト
-        const updateExpression = []; // 更新式の配列
-        const expressionAttributeValues: any = {}; // 更新値を格納するオブジェクト
-        const expressionAttributeNames: any = {}; // 属性名のエイリアスを格納するオブジェクト
-
-        // 各フィールドが更新対象に含まれているかチェックし、UPDATE式を動的構築
-        if (updates.title !== undefined) {
-          updateExpression.push('#title = :title'); // titleフィールドの更新式
-          expressionAttributeNames['#title'] = 'title'; // 予約語対策のエイリアス
-          expressionAttributeValues[':title'] = updates.title; // 更新する値
-        }
-        if (updates.description !== undefined) {
-          updateExpression.push('description = :description'); // descriptionフィールドの更新式
-          expressionAttributeValues[':description'] = updates.description; // 更新する値
-        }
-        if (updates.status !== undefined) {
-          updateExpression.push('#status = :status'); // statusフィールドの更新式
-          expressionAttributeNames['#status'] = 'status'; // 予約語対策のエイリアス
-          expressionAttributeValues[':status'] = updates.status; // 更新する値
-        }
-        if (updates.priority !== undefined) {
-          updateExpression.push('priority = :priority'); // priorityフィールドの更新式
-          expressionAttributeValues[':priority'] = updates.priority; // 更新する値
-        }
-
-        // 更新日時は常に現在時刻に更新
-        updateExpression.push('updatedAt = :updatedAt');
-        expressionAttributeValues[':updatedAt'] = new Date().toISOString();
-
-        // DynamoDBのUpdateCommandを実行
-        await ddbDocClient.send(new UpdateCommand({
+        const result = await ddbDocClient.send(new GetCommand({
           TableName: tableName, // 対象のDynamoDBテーブル
-          Key: { id: taskId, userId }, // 更新対象の複合キー
-          UpdateExpression: 'SET ' + updateExpression.join(', '), // 更新式をカンマ区切りで結合
-          ExpressionAttributeValues: expressionAttributeValues, // 更新値のマッピング
-          ExpressionAttributeNames: Object.keys(expressionAttributeNames).length > 0 ? expressionAttributeNames : undefined, // エイリアスが存在する場合のみ設定
-          ConditionExpression: 'attribute_exists(id)' // 更新対象のレコードが存在することを確認
+          Key: { id: taskId, userId } // 複合キー（パーティションキー: id, ソートキー: userId）
         }));
 
-        // 更新成功のレスポンスを返す
-        return {
-          statusCode: 200, // HTTP 200 OK
-          headers,
-          body: JSON.stringify({ message: 'Task updated successfully' })
-        };
-
-      case 'DELETE': // DELETEリクエストの処理（タスクの削除）
-        // URLパラメータからタスクIDが取得できない場合はエラー
-        if (!event.pathParameters?.id) {
+        // 指定されたタスクが見つからない場合は404エラーを返す
+        if (!result.Item) {
           return {
-            statusCode: 400, // HTTP 400 Bad Request
+            statusCode: 404, // HTTP 404 Not Found
             headers,
-            body: JSON.stringify({ error: 'Task ID is required' })
+            body: JSON.stringify({ error: 'Task not found' })
           };
         }
 
-        const deleteTaskId = event.pathParameters.id; // URLパラメータからタスクIDを取得
-        // DynamoDBからタスクを削除
-        await ddbDocClient.send(new DeleteCommand({
+        // タスクが見つかった場合はデータを返す
+        return {
+          statusCode: 200, // HTTP 200 OK
+          headers,
+          body: JSON.stringify(result.Item) // タスクデータをJSON形式で返す
+        };
+      } else {
+        // 全タスク一覧の取得処理（/tasksへのGETリクエスト）
+        const result = await ddbDocClient.send(new ScanCommand({
           TableName: tableName, // 対象のDynamoDBテーブル
-          Key: { id: deleteTaskId, userId }, // 削除対象の複合キー
-          ConditionExpression: 'attribute_exists(id)' // 削除対象のレコードが存在することを確認
+          FilterExpression: 'userId = :userId', // ユーザーIDでフィルタリング
+          ExpressionAttributeValues: {
+            ':userId': userId // フィルタで使用するユーザーID値
+          }
         }));
 
-        // 削除成功のレスポンスを返す
+        // 取得したタスク一覧を返す
         return {
           statusCode: 200, // HTTP 200 OK
           headers,
-          body: JSON.stringify({ message: 'Task deleted successfully' })
+          body: JSON.stringify(result.Items || []) // タスク配列をJSON形式で返す（空配列も考慮）
         };
+      }
 
-      case 'OPTIONS': // OPTIONSリクエストの処理（CORS preflight対応）
-        return {
-          statusCode: 200, // HTTP 200 OK
-          headers, // CORS対応ヘッダーを返す
-          body: '' // ボディは空文字列
-        };
+    case 'POST': { // POSTリクエストの処理（新規タスク作成）
+      // リクエストボディからタスクデータを取得（JSON文字列をオブジェクトに変換）
+      const newTask = JSON.parse(event.body || '{}') as Partial<Task>;
+      // 新しいタスクオブジェクトを作成（必須フィールドにデフォルト値を設定）
+      const task: Task = {
+        id: generateId(), // 一意のIDを生成（現在時刻＋ランダム文字列）
+        title: newTask.title || '', // タイトル（空文字列をデフォルト値とする）
+        description: newTask.description, // 説明（undefinedも許可）
+        status: newTask.status || 'pending', // ステータス（デフォルトは'pending'）
+        priority: newTask.priority || 'medium', // 優先度（デフォルトは'medium'）
+        userId, // 認証されたユーザーのID
+        createdAt: new Date().toISOString(), // 作成日時（ISO 8601形式）
+        updatedAt: new Date().toISOString() // 更新日時（ISO 8601形式）
+      };
 
-      default: // サポートされていないHTTPメソッドの場合
+      // DynamoDBにタスクを保存
+      await ddbDocClient.send(new PutCommand({
+        TableName: tableName, // 対象のDynamoDBテーブル
+        Item: task // 保存するタスクオブジェクト
+      }));
+
+      // 作成成功のレスポンスを返す
+      return {
+        statusCode: 201, // HTTP 201 Created（新規作成成功）
+        headers,
+        body: JSON.stringify(task) // 作成されたタスクデータを返す
+      };
+    }
+
+    case 'PUT': { // PUTリクエストの処理（既存タスクの更新）
+      // URLパラメータからタスクIDが取得できない場合はエラー
+      if (!event.pathParameters?.id) {
         return {
-          statusCode: 405, // HTTP 405 Method Not Allowed
+          statusCode: 400, // HTTP 400 Bad Request
           headers,
-          body: JSON.stringify({ error: 'Method not allowed' })
+          body: JSON.stringify({ error: 'Task ID is required' })
         };
+      }
+
+      const taskId = event.pathParameters.id; // URLパラメータからタスクIDを取得
+      const updates = JSON.parse(event.body || '{}'); // リクエストボディから更新データを取得
+
+      // DynamoDB UpdateExpressionの構築用配列とオブジェクト
+      const updateExpression: string[] = []; // 更新式の配列
+      const expressionAttributeValues: Record<string, unknown> = {}; // 更新値を格納するオブジェクト
+      const expressionAttributeNames: Record<string, string> = {}; // 属性名のエイリアスを格納するオブジェクト
+
+      // 各フィールドが更新対象に含まれているかチェックし、UPDATE式を動的構築
+      if (updates.title !== undefined) {
+        updateExpression.push('#title = :title'); // titleフィールドの更新式
+        expressionAttributeNames['#title'] = 'title'; // 予約語対策のエイリアス
+        expressionAttributeValues[':title'] = updates.title; // 更新する値
+      }
+      if (updates.description !== undefined) {
+        updateExpression.push('description = :description'); // descriptionフィールドの更新式
+        expressionAttributeValues[':description'] = updates.description; // 更新する値
+      }
+      if (updates.status !== undefined) {
+        updateExpression.push('#status = :status'); // statusフィールドの更新式
+        expressionAttributeNames['#status'] = 'status'; // 予約語対策のエイリアス
+        expressionAttributeValues[':status'] = updates.status; // 更新する値
+      }
+      if (updates.priority !== undefined) {
+        updateExpression.push('priority = :priority'); // priorityフィールドの更新式
+        expressionAttributeValues[':priority'] = updates.priority; // 更新する値
+      }
+
+      // 更新日時は常に現在時刻に更新
+      updateExpression.push('updatedAt = :updatedAt');
+      expressionAttributeValues[':updatedAt'] = new Date().toISOString();
+
+      // DynamoDBのUpdateCommandを実行
+      await ddbDocClient.send(new UpdateCommand({
+        TableName: tableName, // 対象のDynamoDBテーブル
+        Key: { id: taskId, userId }, // 更新対象の複合キー
+        UpdateExpression: 'SET ' + updateExpression.join(', '), // 更新式をカンマ区切りで結合
+        ExpressionAttributeValues: expressionAttributeValues, // 更新値のマッピング
+        ExpressionAttributeNames: Object.keys(expressionAttributeNames).length > 0 ? expressionAttributeNames : undefined, // エイリアスが存在する場合のみ設定
+        ConditionExpression: 'attribute_exists(id)' // 更新対象のレコードが存在することを確認
+      }));
+
+      // 更新成功のレスポンスを返す
+      return {
+        statusCode: 200, // HTTP 200 OK
+        headers,
+        body: JSON.stringify({ message: 'Task updated successfully' })
+      };
+    }
+
+    case 'DELETE': { // DELETEリクエストの処理（タスクの削除）
+      // URLパラメータからタスクIDが取得できない場合はエラー
+      if (!event.pathParameters?.id) {
+        return {
+          statusCode: 400, // HTTP 400 Bad Request
+          headers,
+          body: JSON.stringify({ error: 'Task ID is required' })
+        };
+      }
+
+      const deleteTaskId = event.pathParameters.id; // URLパラメータからタスクIDを取得
+      // DynamoDBからタスクを削除
+      await ddbDocClient.send(new DeleteCommand({
+        TableName: tableName, // 対象のDynamoDBテーブル
+        Key: { id: deleteTaskId, userId }, // 削除対象の複合キー
+        ConditionExpression: 'attribute_exists(id)' // 削除対象のレコードが存在することを確認
+      }));
+
+      // 削除成功のレスポンスを返す
+      return {
+        statusCode: 200, // HTTP 200 OK
+        headers,
+        body: JSON.stringify({ message: 'Task deleted successfully' })
+      };
+    }
+
+    case 'OPTIONS': // OPTIONSリクエストの処理（CORS preflight対応）
+      return {
+        statusCode: 200, // HTTP 200 OK
+        headers, // CORS対応ヘッダーを返す
+        body: '' // ボディは空文字列
+      };
+
+    default: // サポートされていないHTTPメソッドの場合
+      return {
+        statusCode: 405, // HTTP 405 Method Not Allowed
+        headers,
+        body: JSON.stringify({ error: 'Method not allowed' })
+      };
     }
   } catch (error) {
     // エラーハンドリング：予期しないエラーが発生した場合の処理

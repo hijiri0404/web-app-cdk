@@ -12,8 +12,8 @@ import * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 // Amazon S3（オブジェクトストレージ）のモジュールをインポート
 import * as s3 from 'aws-cdk-lib/aws-s3';
-// S3へのファイルデプロイメント機能をインポート
-import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
+// S3へのファイルデプロイメント機能をインポート（将来のフロントエンドデプロイで使用予定）
+// import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 // Amazon CloudFront（CDNサービス）のモジュールをインポート
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 // CloudFrontで使用するオリジン設定のモジュールをインポート
@@ -44,7 +44,7 @@ export class WebAppCdkStack extends cdk.Stack {
     const domainName = this.node.tryGetContext('domainName') || 'your-domain.com';
     // Route53のホストゾーンID（DNS管理に必要）をcdk.jsonから取得
     const hostedZoneId = this.node.tryGetContext('hostedZoneId');
-    
+
     // 既存のRoute53ホストゾーンをインポート（事前にRoute53でドメインを購入・設定済み前提）
     const hostedZone = route53.HostedZone.fromHostedZoneAttributes(this, 'HostedZone', {
       hostedZoneId: hostedZoneId, // Route53で管理されているホストゾーンのID
@@ -150,7 +150,7 @@ export class WebAppCdkStack extends cdk.Stack {
     const tasksResource = api.root.addResource('tasks');
     tasksResource.addMethod('GET');
     tasksResource.addMethod('POST');
-    
+
     const taskResource = tasksResource.addResource('{id}');
     taskResource.addMethod('GET');
     taskResource.addMethod('PUT');
