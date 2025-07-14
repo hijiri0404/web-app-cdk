@@ -51,11 +51,18 @@ export class WebAppCdkStack extends cdk.Stack {
       zoneName: domainName, // 管理対象のドメイン名
     });
 
-    // SSL証明書をAWS Certificate Manager（ACM）で作成（CloudFront用、us-east-1リージョン必須）
-    const certificate = new acm.Certificate(this, 'WebAppCertificate', {
-      domainName: domainName, // メインドメイン名（例：hijiri0404.link）
-      subjectAlternativeNames: [`www.${domainName}`, `api.${domainName}`], // サブドメインも証明書に追加（www.hijiri0404.link, api.hijiri0404.link）
+    // CloudFront用SSL証明書をインポート（us-east-1リージョンで事前作成済み）
+    const cloudfrontCertificate = acm.Certificate.fromCertificateArn(
+      this, 
+      'CloudFrontCertificate', 
+      'arn:aws:acm:us-east-1:471112657080:certificate/7b22bf76-43a0-4c6d-9d25-8c1402945f92'
+    );
+
+    // API Gateway用SSL証明書（us-east-1リージョンで作成 - API Gateway要件）
+    const apiGatewayCertificate = new acm.Certificate(this, 'ApiGatewayCertificate', {
+      domainName: `api.${domainName}`, // APIサブドメイン（例：api.hijiri0404.link）
       validation: acm.CertificateValidation.fromDns(hostedZone), // DNS検証でSSL証明書を自動検証
+      transparencyLoggingEnabled: true,
     });
 
     // タスク管理API用のLambda関数を定義
@@ -156,6 +163,10 @@ export class WebAppCdkStack extends cdk.Stack {
     taskResource.addMethod('PUT'); // PUT /tasks/{id} - 指定タスクの更新
     taskResource.addMethod('DELETE'); // DELETE /tasks/{id} - 指定タスクの削除
 
+    // 重要：全てのAPIリソースとメソッド定義完了後にCognito User Poolsオーソライザーを追加
+    // Solutions Constructsの警告解決と公式ドキュメント要件に従った実装
+    cognitoApiLambda.addAuthorizers();
+
     // フロントエンド用S3バケットを作成（Webサイトのファイルを格納）
     const websiteBucket = new s3.Bucket(this, 'WebsiteBucket', {
       bucketName: `${domainName}-website`, // バケット名：ドメイン名-website形式
@@ -194,7 +205,7 @@ export class WebAppCdkStack extends cdk.Stack {
         },
       },
       domainNames: [domainName, `www.${domainName}`], // カスタムドメイン名を設定（メインドメインとwwwサブドメイン）
-      certificate: certificate, // 上で作成したSSL証明書を使用
+      certificate: cloudfrontCertificate, // CloudFront用SSL証明書を使用
       defaultRootObject: 'index.html', // ルートアクセス時のデフォルトファイル
       errorResponses: [ // エラーページのカスタム設定（SPA用設定）
         {
@@ -210,6 +221,9 @@ export class WebAppCdkStack extends cdk.Stack {
       ],
       httpVersion: cloudfront.HttpVersion.HTTP2_AND_3, // HTTP/2とHTTP/3を有効化（高速化）
       priceClass: cloudfront.PriceClass.PRICE_CLASS_100, // 料金クラス：最も安い設定（北米・欧州のみ）
+      // デプロイ時間短縮のための設定
+      enabled: true, // ディストリビューションを有効化
+      comment: 'Task Management Web App Distribution', // 管理用コメント
     });
 
     // CloudFrontにS3バケットへのアクセス権限を付与（セキュアな権限設定）
@@ -247,8 +261,8 @@ export class WebAppCdkStack extends cdk.Stack {
     // API Gateway用のカスタムドメイン設定
     const apiDomainName = new apigateway.DomainName(this, 'ApiDomainName', {
       domainName: `api.${domainName}`, // APIサブドメイン（例：api.hijiri0404.link）
-      certificate: certificate, // 上で作成したSSL証明書を使用
-      endpointType: apigateway.EndpointType.EDGE, // エッジ最適化エンドポイント（CloudFrontと同様の効果）
+      certificate: apiGatewayCertificate, // API Gateway用SSL証明書を使用
+      endpointType: apigateway.EndpointType.REGIONAL, // リージョナルエンドポイント（現在のリージョンの証明書を使用可能）
       securityPolicy: apigateway.SecurityPolicy.TLS_1_2, // TLS 1.2以上のセキュリティポリシーを強制
     });
 

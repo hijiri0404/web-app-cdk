@@ -18,7 +18,7 @@
   },
   "context": {
     "domainName": "hijiri0404.link",
-    "hostedZoneId": "YOUR_HOSTED_ZONE_ID",
+    "hostedZoneId": "Z05608792OMRUEGE6GF3A",
     "@aws-cdk/aws-lambda:recognizeLayerVersion": true,
     "@aws-cdk/core:checkSecretUsage": true,
     "@aws-cdk/core:target-partitions": [

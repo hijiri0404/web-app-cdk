@@ -104,8 +104,42 @@ web-app-cdk/
 - **AWS CLI** 2.x （設定済み）
 - **AWS CDK** 2.x
 - **Route53で管理されているドメイン**
+- **⚠️ CloudFront用SSL証明書をus-east-1で事前作成**
 
-### 1分でセットアップ
+### SSL証明書の事前作成（必須）
+
+⚠️ **重要**: デプロイ前に、CloudFront用SSL証明書をus-east-1リージョンで作成する必要があります。
+
+```bash
+# 1. us-east-1リージョンでSSL証明書を作成
+aws acm request-certificate \
+  --domain-name "your-domain.com" \
+  --subject-alternative-names "www.your-domain.com" \
+  --validation-method DNS \
+  --region us-east-1
+
+# 2. 証明書ARNを記録（例: arn:aws:acm:us-east-1:123456789012:certificate/abcd1234-...）
+
+# 3. DNS検証レコードを取得
+aws acm describe-certificate \
+  --certificate-arn "your-certificate-arn" \
+  --region us-east-1 \
+  --query 'Certificate.DomainValidationOptions[*].[DomainName,ResourceRecord.Name,ResourceRecord.Value]' \
+  --output table
+
+# 4. 表示されたDNS検証レコードをRoute53に手動追加
+
+# 5. 証明書が発行されるまで待機（通常5-10分）
+aws acm describe-certificate \
+  --certificate-arn "your-certificate-arn" \
+  --region us-east-1 \
+  --query 'Certificate.Status'
+
+# 6. lib/web-app-cdk-stack.ts の証明書ARNを更新
+# 　　const cloudfrontCertificate = acm.Certificate.fromCertificateArn(...)
+```
+
+### 3分でセットアップ
 
 ```bash
 # 1. リポジトリクローン（または既存プロジェクト）
@@ -120,7 +154,10 @@ cdk bootstrap
 # 4. ドメイン設定
 # cdk.json の domainName と hostedZoneId を更新
 
-# 5. デプロイ
+# 5. SSL証明書ARNの設定
+# lib/web-app-cdk-stack.ts で証明書ARNを更新
+
+# 6. デプロイ
 cdk deploy
 ```
 
@@ -228,6 +265,12 @@ AWS_PROFILE=production cdk deploy
 cdk deploy --require-approval always
 ```
 
+### デプロイ時間の目安
+
+- **初回デプロイ**: 20-25分（CloudFrontディストリビューション作成含む）
+- **更新デプロイ**: 10-15分
+- **SSL証明書検証**: 5-10分（DNS伝播次第）
+
 ### デプロイ後の確認
 
 ```bash
@@ -325,6 +368,25 @@ defaultCorsPreflightOptions: {
 }
 ```
 
+#### 🔴 SSL証明書エラー: "Certificate must be in 'us-east-1'"
+
+**原因**: CloudFrontは必ずus-east-1リージョンの証明書が必要
+
+**解決策**:
+1. us-east-1で証明書を事前作成
+2. 証明書ARNをCDKコードに直接指定
+3. DNS検証レコードをRoute53に追加
+
+```bash
+# us-east-1で証明書作成
+aws acm request-certificate --domain-name "your-domain.com" --region us-east-1
+
+# lib/web-app-cdk-stack.ts で証明書ARNを指定
+const cloudfrontCertificate = acm.Certificate.fromCertificateArn(
+  this, 'CloudFrontCertificate', 'arn:aws:acm:us-east-1:...'
+);
+```
+
 #### 🔴 SSL証明書エラー: "Certificate validation failed"
 
 **原因**: DNSの伝播が完了していない
@@ -337,6 +399,71 @@ dig hijiri0404.link
 # 数分待ってから再デプロイ
 cdk deploy
 ```
+
+#### 🔴 API認証エラー: "Invalid authorizer ID specified"
+
+**原因**: Solutions Constructsで`addAuthorizers()`の呼び出しタイミングが不適切
+
+**解決策**:
+```typescript
+// lib/web-app-cdk-stack.ts で正しい順序を確認
+const cognitoApiLambda = new CognitoToApiGatewayToLambda(...);
+
+// 先にすべてのAPIリソース・メソッドを定義
+const api = cognitoApiLambda.apiGateway;
+const tasksResource = api.root.addResource('tasks');
+tasksResource.addMethod('GET');
+// ... 他のメソッド定義
+
+// 最後にCognito認証を適用
+cognitoApiLambda.addAuthorizers(); // ← 必ず最後に実行
+```
+
+## 🔧 アーキテクチャの詳細説明
+
+### API Gateway エンドポイントタイプの選択
+
+本プロジェクトでは**Regionalエンドポイント**を使用しています。各タイプの違いを理解しておくことが重要です：
+
+| エンドポイントタイプ | 証明書リージョン要件 | CloudFront使用 | 用途 | レイテンシ |
+|-------------------|-----------------|---------------|------|-----------|
+| **Edge-Optimized** | us-east-1必須 | 自動使用 | グローバル | 低（世界中） |
+| **Regional** | 任意のリージョン | 使用しない | 特定地域 | 低（そのリージョン） |
+| **Private** | 任意のリージョン | 使用しない | VPC内部 | 低（VPC内） |
+
+#### なぜRegionalを選択したか
+
+```typescript
+// lib/web-app-cdk-stack.ts
+const apiDomainName = new apigateway.DomainName(this, 'ApiDomainName', {
+  domainName: `api.${domainName}`,
+  certificate: apiGatewayCertificate, // ap-northeast-1の証明書でOK
+  endpointType: apigateway.EndpointType.REGIONAL, // Regional設定
+  securityPolicy: apigateway.SecurityPolicy.TLS_1_2,
+});
+```
+
+**選択理由**:
+1. **シンプルな設定**: 証明書もAPI Gatewayも同じリージョン（ap-northeast-1）
+2. **日本向けアプリ**: 主要ユーザーが日本のため十分なパフォーマンス
+3. **メンテナンス性**: クロスリージョン設定の複雑さを回避
+4. **コスト効率**: CloudFrontの追加料金なし
+
+**グローバル展開時の変更点**:
+Edge-Optimizedに変更する場合は、API Gateway用証明書もus-east-1で作成する必要があります。
+
+### SSL証明書の管理戦略
+
+```
+CloudFront用証明書 (us-east-1)
+├── hijiri0404.link
+└── www.hijiri0404.link
+
+API Gateway用証明書 (ap-northeast-1)  
+└── api.hijiri0404.link
+```
+
+この分離により、各サービスの制約に適切に対応しています。
 
 ### ログ調査方法
 
